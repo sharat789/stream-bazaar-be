@@ -14,8 +14,15 @@ export class SessionViewService {
 
   /**
    * Record a user joining a session
+   * Returns: { sessionView, wasReconnection }
+   * - wasReconnection: true if this user had an existing active view that was closed
    */
-  async joinSession(data: CreateSessionViewDto): Promise<SessionView> {
+  async joinSession(data: CreateSessionViewDto): Promise<{
+    sessionView: SessionView;
+    wasReconnection: boolean;
+  }> {
+    let wasReconnection = false;
+
     // Close any existing active view for this user in this session
     if (data.userId) {
       const existingView = await this.findActiveView(
@@ -24,14 +31,19 @@ export class SessionViewService {
       );
       if (existingView) {
         await this.leaveSession(existingView.id);
+        wasReconnection = true; // User is reconnecting, not a new viewer
       }
     }
 
     // Also close any stale views with this socketId (handles reconnections)
     if (data.socketId) {
       const staleView = await this.findBySocketId(data.socketId);
-      if (staleView) {
+      if (staleView && staleView.sessionId === data.sessionId) {
         await this.leaveSession(staleView.id);
+        // Only mark as reconnection if we haven't already
+        if (!wasReconnection && staleView.userId === data.userId) {
+          wasReconnection = true;
+        }
       }
     }
 
@@ -42,7 +54,12 @@ export class SessionViewService {
       role: data.role || "subscriber",
     });
 
-    return this.sessionViewRepository.save(sessionView);
+    const savedView = await this.sessionViewRepository.save(sessionView);
+
+    return {
+      sessionView: savedView,
+      wasReconnection,
+    };
   }
 
   /**

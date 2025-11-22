@@ -3,11 +3,13 @@ import { IsNull } from "typeorm";
 import { SessionViewService } from "../services/session-view.service";
 import { SessionService } from "../services/sessions.service";
 import { SessionProductService } from "../services/session-product.service";
+import { ProductClickService } from "../services/product-click.service";
 import { getSessionReactions } from "../ws/socket.handler";
 
 const sessionViewService = new SessionViewService();
 const sessionsService = new SessionService();
 const sessionProductService = new SessionProductService();
+const productClickService = new ProductClickService();
 
 /**
  * Get comprehensive analytics for a session
@@ -300,6 +302,218 @@ export const getViewerList = async (
           : null,
         isActive: !v.leftAt,
       })),
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get product conversion stats for a session
+ * GET /api/sessions/:sessionId/conversion-stats
+ */
+export const getConversionStats = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const { sessionId } = req.params;
+
+    // Verify session exists
+    const session = await sessionsService.findOne(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        message: "Session not found",
+      });
+    }
+
+    // Check if session is live (get live data) or ended (get persisted data)
+    if (session.status === "live") {
+      // Get live stats from memory
+      await productClickService.updateViewerCount(sessionId);
+      const liveStats = productClickService.getSessionStats(sessionId);
+
+      return res.json({
+        success: true,
+        sessionId,
+        sessionStatus: "live",
+        data: {
+          totalViewers: liveStats.totalViewers,
+          products: liveStats.productStats.map((stat) => ({
+            productId: stat.productId,
+            uniqueClicks: stat.uniqueClicks,
+            totalClicks: stat.totalClicks,
+            clickThroughRate: stat.clickThroughRate,
+          })),
+        },
+      });
+    } else {
+      // Get persisted stats from database
+      const persistedStats = await productClickService.getPersistedStats(
+        sessionId
+      );
+
+      return res.json({
+        success: true,
+        sessionId,
+        sessionStatus: session.status,
+        data: {
+          totalViewers: persistedStats[0]?.totalViewers || 0,
+          products: persistedStats.map((stat) => ({
+            productId: stat.productId,
+            productName: stat.product?.name,
+            uniqueClicks: stat.uniqueClicks,
+            totalClicks: stat.totalClicks,
+            clickThroughRate: stat.clickThroughRate,
+            createdAt: stat.createdAt,
+            updatedAt: stat.updatedAt,
+          })),
+        },
+      });
+    }
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get global analytics for a creator across all sessions
+ * GET /api/analytics/creator/:creatorId
+ */
+export const getCreatorGlobalAnalytics = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const creatorId = parseInt(req.params.creatorId);
+
+    if (isNaN(creatorId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid creator ID",
+      });
+    }
+
+    // Get all sessions for this creator
+    const sessions = await sessionsService["sessionRepository"].find({
+      where: { creatorId },
+      select: ["id", "status", "reactionCounts"],
+    });
+
+    if (sessions.length === 0) {
+      return res.json({
+        success: true,
+        creatorId,
+        data: {
+          sessions: {
+            total: 0,
+            byStatus: { live: 0, ended: 0, scheduled: 0, paused: 0 },
+          },
+          viewers: {
+            totalUnique: 0,
+            averagePerSession: 0,
+            peakConcurrent: 0,
+          },
+          reactions: {
+            total: 0,
+            breakdown: {},
+          },
+          products: {
+            totalClicks: 0,
+            uniqueUsers: 0,
+            averageCTR: 0,
+          },
+        },
+      });
+    }
+
+    const sessionIds = sessions.map((s) => s.id);
+
+    // 1. Session Summary
+    const sessionsByStatus = {
+      live: sessions.filter((s) => s.status === "live").length,
+      ended: sessions.filter((s) => s.status === "ended").length,
+      scheduled: sessions.filter((s) => s.status === "scheduled").length,
+      paused: sessions.filter((s) => s.status === "paused").length,
+    };
+
+    // 2. Viewer Metrics
+    const viewerStats = await sessionViewService[
+      "sessionViewRepository"
+    ].createQueryBuilder("view")
+      .select("COUNT(DISTINCT view.userId)", "uniqueViewers")
+      .addSelect("COUNT(*)", "totalViews")
+      .where("view.sessionId IN (:...sessionIds)", { sessionIds })
+      .andWhere("view.role = :role", { role: "subscriber" })
+      .getRawOne();
+
+    const totalUniqueViewers = parseInt(viewerStats.uniqueViewers) || 0;
+    const averageViewersPerSession =
+      sessions.length > 0
+        ? Math.round(totalUniqueViewers / sessions.length)
+        : 0;
+
+    // Get peak concurrent viewers across all sessions
+    let peakConcurrent = 0;
+    for (const sessionId of sessionIds) {
+      const peak = await sessionViewService.getPeakViewers(sessionId);
+      peakConcurrent = Math.max(peakConcurrent, peak);
+    }
+
+    // 3. Reaction Metrics
+    const reactionBreakdown: { [key: string]: number } = {};
+    let totalReactions = 0;
+
+    sessions.forEach((session) => {
+      if (session.reactionCounts) {
+        Object.entries(session.reactionCounts).forEach(([type, count]) => {
+          reactionBreakdown[type] =
+            (reactionBreakdown[type] || 0) + (count as number);
+          totalReactions += count as number;
+        });
+      }
+    });
+
+    // 4. Product Conversion Metrics
+    const productStats = await productClickService[
+      "clickStatsRepository"
+    ].createQueryBuilder("stats")
+      .select("SUM(stats.totalClicks)", "totalClicks")
+      .addSelect("SUM(stats.uniqueClicks)", "uniqueClicks")
+      .addSelect("AVG(stats.clickThroughRate)", "avgCTR")
+      .where("stats.sessionId IN (:...sessionIds)", { sessionIds })
+      .getRawOne();
+
+    const totalClicks = parseInt(productStats.totalClicks) || 0;
+    const uniqueClickers = parseInt(productStats.uniqueClicks) || 0;
+    const averageCTR = parseFloat(productStats.avgCTR) || 0;
+
+    return res.json({
+      success: true,
+      creatorId,
+      data: {
+        sessions: {
+          total: sessions.length,
+          byStatus: sessionsByStatus,
+        },
+        viewers: {
+          totalUnique: totalUniqueViewers,
+          averagePerSession: averageViewersPerSession,
+          peakConcurrent,
+        },
+        reactions: {
+          total: totalReactions,
+          breakdown: reactionBreakdown,
+        },
+        products: {
+          totalClicks,
+          uniqueUsers: uniqueClickers,
+          averageCTR: parseFloat(averageCTR.toFixed(2)),
+        },
+      },
     });
   } catch (error) {
     next(error);

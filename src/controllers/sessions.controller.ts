@@ -7,6 +7,7 @@ import {
   getSocketIO,
   getSessionReactions,
   clearSessionReactions,
+  persistProductClickData,
 } from "../ws/socket.handler";
 
 const sessionService = new SessionService();
@@ -307,6 +308,9 @@ export class SessionController {
           reactionCounts
         );
       }
+
+      // Persist product click data to database
+      await persistProductClickData(id);
 
       // Notify all viewers via WebSocket that stream has ended
       const io = getSocketIO();

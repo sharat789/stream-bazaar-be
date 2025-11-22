@@ -476,6 +476,160 @@ Get detailed analytics and insights for streaming sessions. **Requires authentic
 | `GET`  | `/live`    | Get currently active live viewers   | **Yes**       | Real-time list of viewers currently watching, with watch durations                                   |
 | `GET`  | `/viewers` | Get detailed viewer history         | **Yes**       | Complete viewer list with join/leave times, watch durations, and user info (past & present)          |
 
+## 🛒 Product Click Tracking & Conversion Analytics
+
+**Base Path:** `/api/sessions/:sessionId`
+
+Track and analyze product engagement during live streaming sessions.
+
+| Method | Endpoint            | Purpose                                   | Auth Required | Response Data                                               |
+| ------ | ------------------- | ----------------------------------------- | ------------- | ----------------------------------------------------------- |
+| `GET`  | `/conversion-stats` | Get product click and conversion analytics | Optional      | Product click stats, CTR, unique/total clicks (live or historical) |
+
+## 📈 Global Analytics (Creator Dashboard)
+
+**Base Path:** `/api/analytics`
+
+Aggregate analytics across all sessions for a creator.
+
+| Method | Endpoint              | Purpose                                   | Auth Required | Response Data                                               |
+| ------ | --------------------- | ----------------------------------------- | ------------- | ----------------------------------------------------------- |
+| `GET`  | `/creator/:creatorId` | Get global analytics for all creator sessions | **Yes**   | Session summary, viewer stats, reactions, product performance |
+
+### Get Creator Global Analytics
+
+**Endpoint:** `GET /api/analytics/creator/:creatorId`
+
+Get aggregated analytics across all sessions created by a specific creator. Perfect for creator dashboard overview.
+
+**Response Format:**
+
+```json
+{
+  "success": true,
+  "creatorId": 1,
+  "data": {
+    "sessions": {
+      "total": 15,
+      "byStatus": {
+        "live": 1,
+        "ended": 10,
+        "scheduled": 3,
+        "paused": 1
+      }
+    },
+    "viewers": {
+      "totalUnique": 1250,
+      "averagePerSession": 83,
+      "peakConcurrent": 342
+    },
+    "reactions": {
+      "total": 5430,
+      "breakdown": {
+        "heart": 2100,
+        "like": 1800,
+        "fire": 900,
+        "clap": 630
+      }
+    },
+    "products": {
+      "totalClicks": 890,
+      "uniqueUsers": 245,
+      "averageCTR": 19.6
+    }
+  }
+}
+```
+
+**Metrics Explained:**
+
+**Sessions:**
+- `total` - Total number of sessions created by the creator
+- `byStatus` - Breakdown by session status (live, ended, scheduled, paused)
+
+**Viewers:**
+- `totalUnique` - Total distinct authenticated users who watched across all sessions
+- `averagePerSession` - Average unique viewers per session
+- `peakConcurrent` - Highest concurrent viewer count across any session
+
+**Reactions:**
+- `total` - Sum of all reactions across all sessions
+- `breakdown` - Reactions grouped by type (heart, like, fire, clap, etc.)
+
+**Products:**
+- `totalClicks` - Sum of all product clicks across all sessions
+- `uniqueUsers` - Total distinct users who clicked on products
+- `averageCTR` - Average click-through rate across all sessions
+
+**Use Cases:**
+- Creator dashboard overview page
+- Performance tracking over time
+- Comparing session effectiveness
+- Identifying trending content types
+
+### Get Conversion Stats
+
+**Endpoint:** `GET /api/sessions/:sessionId/conversion-stats`
+
+Get product click tracking data and conversion metrics. Returns live data during active streams or persisted historical data for ended sessions.
+
+**Response Format (Live Session):**
+
+```json
+{
+  "success": true,
+  "sessionId": "uuid",
+  "sessionStatus": "live",
+  "data": {
+    "totalViewers": 271,
+    "products": [
+      {
+        "productId": "uuid",
+        "uniqueClicks": 42,
+        "totalClicks": 67,
+        "clickThroughRate": 15.5
+      }
+    ]
+  }
+}
+```
+
+**Response Format (Ended Session):**
+
+```json
+{
+  "success": true,
+  "sessionId": "uuid",
+  "sessionStatus": "ended",
+  "data": {
+    "totalViewers": 271,
+    "products": [
+      {
+        "productId": "uuid",
+        "productName": "Cool Product",
+        "uniqueClicks": 42,
+        "totalClicks": 67,
+        "clickThroughRate": 15.5,
+        "createdAt": "2025-11-22T10:00:00.000Z",
+        "updatedAt": "2025-11-22T10:00:00.000Z"
+      }
+    ]
+  }
+}
+```
+
+**Metrics Explained:**
+
+- **uniqueClicks** - Number of distinct users who clicked on the product
+- **totalClicks** - Total number of clicks (including repeat clicks)
+- **clickThroughRate** - Percentage of viewers who clicked: `(uniqueClicks / totalViewers) × 100`
+- **totalViewers** - Total number of viewers during the session
+
+**Data Source:**
+
+- **Live sessions**: Real-time data from in-memory tracking
+- **Ended sessions**: Historical data from `product_click_stats` table
+
 **Response Format (GET `/api/sessions/:sessionId/analytics`):**
 
 ```json
@@ -657,15 +811,18 @@ GET /api/search/sessions?q=gaming&limit=20&offset=40
 | `leave-session`     | Client → Server | `sessionId: string`                                                                                     | Leave a streaming session room                                  |
 | `send-reaction`     | Client → Server | `{ sessionId: string, type: string }`                                                                   | Send reaction to session (e.g., 'like', 'love', 'fire', 'clap') |
 | `send-message`      | Client → Server | `{ sessionId: string, message: string, userId: number, userName: string }`                              | Send chat message to session                                    |
-| `showcase-product`  | Client → Server | `{ sessionId: string, productId: string \| null }`                                                      | Set or clear active product showcase (creator only)             |
-| `viewer-count`      | Server → Client | `count: number`                                                                                         | Receive updated viewer count for session                        |
+| `showcase-product`    | Client → Server | `{ sessionId: string, productId: string \| null }`                                                      | Set or clear active product showcase (creator only)             |
+| `track-product-click` | Client → Server | `{ sessionId: string, productId: string, userId: number \| null }`                                      | Track product click for conversion analytics                    |
+| `viewer-count`        | Server → Client | `count: number`                                                                                         | Receive updated viewer count for session                        |
 | `new-reaction`      | Server → Client | `{ type: string, timestamp: Date }`                                                                     | Receive new reaction in session                                 |
 | `reaction-stats`    | Server → Client | `{ sessionId: string, counts: { [type: string]: number }, total: number }`                              | Receive updated reaction counts (broadcasted after each react)  |
 | `new-message`       | Server → Client | `{ id: string, message: string, userId: number, userName: string, sessionId: string, createdAt: Date }` | Receive new chat message in session                             |
 | `stream-started`    | Server → Client | `{ sessionId: string, channelName: string, status: "live", startedAt: Date }`                           | Stream has started (notify all in room)                         |
 | `stream-ended`      | Server → Client | `{ sessionId: string, status: "ended", endedAt: Date }`                                                 | Stream has ended (notify all in room)                           |
-| `product-showcased` | Server → Client | `{ sessionId: string, productId: string, product: Product }`                                            | Product has been showcased (all viewers notified)               |
-| `showcase-cleared`  | Server → Client | `{ sessionId: string }`                                                                                 | Product showcase has been cleared (all viewers notified)        |
+| `product-showcased`   | Server → Client | `{ sessionId: string, productId: string, product: Product }`                                            | Product has been showcased (all viewers notified)               |
+| `showcase-cleared`    | Server → Client | `{ sessionId: string }`                                                                                 | Product showcase has been cleared (all viewers notified)        |
+| `product-click-stats` | Server → Client | `{ sessionId: string, productStats: Array, totalViewers: number, timestamp: Date }`                     | Product click statistics update (broadcasted every 4s)          |
+| `trending-products`   | Server → Client | `{ sessionId: string, products: Array, timestamp: Date }`                                               | Top 5 trending products by clicks (broadcasted every 4s)        |
 
 ### Viewer Tracking & Role-Based Counting
 
@@ -865,6 +1022,101 @@ socket.on('showcase-cleared', (data) => {
 - Show product image, name, price, and description
 
 **Note:** For persistent chat storage, also use the REST API endpoints. WebSocket events provide real-time broadcasting only.
+
+### Product Click Tracking (Real-time)
+
+**Frontend Implementation:**
+
+```javascript
+// Viewer: Track a product click when user clicks on a product
+socket.emit('track-product-click', {
+  sessionId: 'session-uuid',
+  productId: 'product-uuid',
+  userId: currentUser?.id || null  // null for anonymous users
+});
+
+// Creator Dashboard: Listen for detailed click statistics
+socket.on('product-click-stats', (data) => {
+  // data: {
+  //   sessionId: 'uuid',
+  //   productStats: [
+  //     {
+  //       productId: 'uuid',
+  //       uniqueClicks: 42,
+  //       totalClicks: 67,
+  //       clickThroughRate: 15.5
+  //     }
+  //   ],
+  //   totalViewers: 271,
+  //   timestamp: '2025-11-22T...'
+  // }
+
+  // Update creator dashboard with conversion metrics
+  updateConversionDashboard(data);
+});
+
+// All Viewers: Listen for trending products (top 5)
+socket.on('trending-products', (data) => {
+  // data: {
+  //   sessionId: 'uuid',
+  //   products: [
+  //     { productId: 'uuid', uniqueClicks: 42, totalClicks: 67, clickThroughRate: 15.5 }
+  //   ],
+  //   timestamp: '2025-11-22T...'
+  // }
+
+  // Display trending products to viewers
+  updateTrendingProductsList(data.products);
+});
+
+// Fetch historical conversion data after stream ends
+const response = await fetch(`/api/sessions/${sessionId}/conversion-stats`);
+const { data } = await response.json();
+console.log('Historical conversion data:', data);
+```
+
+**Backend Behavior:**
+
+1. **Click Tracking (`track-product-click`):**
+   - Validates session exists and is live
+   - Verifies product is linked to the session
+   - Tracks unique users (supports authenticated and anonymous)
+   - Increments total click counter
+   - No response to sender (fire-and-forget)
+
+2. **Real-time Broadcasting:**
+   - Starts automatically on first click in a session
+   - Broadcasts every 4 seconds during active session
+   - `product-click-stats` - Detailed stats for all viewers (includes creator)
+   - `trending-products` - Top 5 products by unique clicks
+   - Updates viewer count from SessionView service
+
+3. **Data Persistence:**
+   - Click data tracked in-memory during live session
+   - Automatically saved to `product_click_stats` table when stream ends
+   - Memory cleared after persistence to prevent leaks
+   - Historical data accessible via REST API
+
+**Validation Rules:**
+
+- Session must be `live` (not scheduled, paused, or ended)
+- Product must exist in session's product list
+- Anonymous users get unique identifiers for deduplication
+- Click-through rate calculated as: `(uniqueClicks / totalViewers) × 100`
+
+**Use Cases:**
+
+- **Conversion Analytics:** Track which products viewers are interested in
+- **Real-time Optimization:** Creator adjusts focus based on trending products
+- **Post-Stream Insights:** Analyze product engagement after stream ends
+- **A/B Testing:** Compare product presentation strategies across sessions
+
+**Performance:**
+
+- In-memory tracking uses Set for O(1) unique user lookup
+- Broadcasts throttled to 4-second intervals (no database overhead)
+- Database writes only on session end
+- Supports reconnections without data loss
 
 ## Health Check
 

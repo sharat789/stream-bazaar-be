@@ -3,6 +3,7 @@ import { SessionViewService } from "../services/session-view.service";
 import { ChatService } from "../services/chat.service";
 import { SessionService } from "../services/sessions.service";
 import { SessionProductService } from "../services/session-product.service";
+import { ProductClickService } from "../services/product-click.service";
 
 interface ChatMessagePayload {
   sessionId: string;
@@ -21,11 +22,23 @@ interface ShowcaseProductPayload {
   productId: string | null;
 }
 
+interface TrackProductClickPayload {
+  sessionId: string;
+  productId: string;
+  userId: number | null;
+}
+
 // Store the io instance globally so controllers can emit events
 let ioInstance: SocketIOServer | null = null;
 
 // Store in-memory reaction counts per session
 const sessionReactions = new Map<string, Map<string, number>>();
+
+// Store broadcast intervals for product click stats
+const statsBroadcastIntervals = new Map<string, NodeJS.Timeout>();
+
+// Product click service instance
+const productClickService = new ProductClickService();
 
 export const getSocketIO = (): SocketIOServer | null => {
   return ioInstance;
@@ -51,16 +64,120 @@ export const clearSessionReactions = (sessionId: string): void => {
   sessionReactions.delete(sessionId);
 };
 
+/**
+ * Start broadcasting product click stats for a session
+ */
+const startStatsBroadcast = (sessionId: string) => {
+  // Clear any existing interval
+  stopStatsBroadcast(sessionId);
+
+  // Initialize session tracking
+  productClickService.initializeSession(sessionId);
+
+  // Broadcast stats every 4 seconds
+  const interval = setInterval(async () => {
+    if (!ioInstance) return;
+
+    try {
+      // Update viewer count
+      await productClickService.updateViewerCount(sessionId);
+
+      // Get current stats
+      const stats = productClickService.getSessionStats(sessionId);
+      const trendingProducts = productClickService.getTrendingProducts(
+        sessionId,
+        5
+      );
+
+      // Broadcast to creator (detailed stats)
+      ioInstance.to(sessionId).emit("product-click-stats", {
+        sessionId,
+        productStats: stats.productStats,
+        totalViewers: stats.totalViewers,
+        timestamp: new Date(),
+      });
+
+      // Broadcast to all viewers (trending products)
+      ioInstance.to(sessionId).emit("trending-products", {
+        sessionId,
+        products: trendingProducts,
+        timestamp: new Date(),
+      });
+    } catch (error) {
+      console.error(
+        `Error broadcasting stats for session ${sessionId}:`,
+        error
+      );
+    }
+  }, 2000); // 2 seconds
+
+  statsBroadcastIntervals.set(sessionId, interval);
+  console.log(`📊 Started stats broadcast for session ${sessionId}`);
+};
+
+/**
+ * Stop broadcasting product click stats for a session
+ */
+const stopStatsBroadcast = (sessionId: string) => {
+  const interval = statsBroadcastIntervals.get(sessionId);
+  if (interval) {
+    clearInterval(interval);
+    statsBroadcastIntervals.delete(sessionId);
+    console.log(`📊 Stopped stats broadcast for session ${sessionId}`);
+  }
+};
+
+/**
+ * Persist product click data when session ends
+ */
+export const persistProductClickData = async (
+  sessionId: string
+): Promise<void> => {
+  try {
+    // Stop broadcasting
+    stopStatsBroadcast(sessionId);
+
+    // Persist data to database
+    await productClickService.persistSessionData(sessionId);
+
+    console.log(`✅ Product click data persisted for session ${sessionId}`);
+  } catch (error) {
+    console.error(
+      `❌ Error persisting product click data for session ${sessionId}:`,
+      error
+    );
+  }
+};
+
 export const setupSocketHandlers = (io: SocketIOServer) => {
   // Store the io instance
   ioInstance = io;
-  const viewerCounts = new Map<string, number>();
   const sessionViewService = new SessionViewService();
   const chatService = new ChatService();
   const sessionService = new SessionService();
   const sessionProductService = new SessionProductService();
   const socketToViewMap = new Map<string, string>(); // socketId -> sessionViewId
   const socketToSessionMap = new Map<string, string>(); // socketId -> sessionId
+  const sessionToRoleMap = new Map<string, string>(); // socketId -> role (publisher/subscriber)
+
+  /**
+   * Calculate current viewer count for a session by counting active subscriber sockets
+   */
+  const getViewerCount = (sessionId: string): number => {
+    let count = 0;
+    const socketsInRoom = io.sockets.adapter.rooms.get(sessionId);
+
+    if (socketsInRoom) {
+      for (const socketId of socketsInRoom) {
+        // Only count subscribers (not publishers)
+        if (sessionToRoleMap.get(socketId) === "subscriber") {
+          count++;
+        }
+      }
+    }
+
+    return count;
+  };
 
   io.on("connection", (socket: Socket) => {
     console.log("✅ Client connected:", socket.id);
@@ -81,31 +198,36 @@ export const setupSocketHandlers = (io: SocketIOServer) => {
         const isPublisher = userId && session && userId === session.creatorId;
         const role = isPublisher ? "publisher" : "subscriber";
 
-        const sessionView = await sessionViewService.joinSession({
-          sessionId,
-          userId,
-          socketId: socket.id,
-          role,
-        });
+        const { sessionView, wasReconnection } =
+          await sessionViewService.joinSession({
+            sessionId,
+            userId,
+            socketId: socket.id,
+            role,
+          });
         socketToViewMap.set(socket.id, sessionView.id);
         socketToSessionMap.set(socket.id, sessionId);
+        sessionToRoleMap.set(socket.id, role); // Track role for viewer counting
 
-        // Update viewer count (exclude publishers)
-        if (!isPublisher) {
-          const count = (viewerCounts.get(sessionId) || 0) + 1;
-          viewerCounts.set(sessionId, count);
-          console.log(`👤 Viewer joined session ${sessionId}. Count: ${count}`);
-          io.to(sessionId).emit("viewer-count", count);
+        // Calculate and broadcast current viewer count
+        const count = getViewerCount(sessionId);
+
+        if (isPublisher) {
+          console.log(
+            `🎥 Publisher joined their own session ${sessionId} (not counted as viewer). Current viewers: ${count}`
+          );
+        } else if (wasReconnection) {
+          console.log(
+            `🔄 Viewer reconnected to session ${sessionId}. Count: ${count}`
+          );
         } else {
           console.log(
-            `🎥 Publisher joined their own session ${sessionId} (not counted as viewer)`
-          );
-          // Still emit current count for publisher to see
-          io.to(sessionId).emit(
-            "viewer-count",
-            viewerCounts.get(sessionId) || 0
+            `👤 New viewer joined session ${sessionId}. Count: ${count}`
           );
         }
+
+        // Broadcast count to all in session
+        io.to(sessionId).emit("viewer-count", count);
       } catch (error) {
         console.error("Error tracking session view:", error);
       }
@@ -118,24 +240,29 @@ export const setupSocketHandlers = (io: SocketIOServer) => {
       // Update view record in database
       try {
         const sessionViewId = socketToViewMap.get(socket.id);
+        const role = sessionToRoleMap.get(socket.id);
+
         if (sessionViewId) {
           const sessionView = await sessionViewService.leaveSession(
             sessionViewId
           );
           socketToViewMap.delete(socket.id);
           socketToSessionMap.delete(socket.id);
+          sessionToRoleMap.delete(socket.id);
 
-          // Only decrement count if it was a subscriber (not publisher)
-          if (sessionView && sessionView.role === "subscriber") {
-            const count = Math.max(0, (viewerCounts.get(sessionId) || 1) - 1);
-            viewerCounts.set(sessionId, count);
+          // Calculate and broadcast new viewer count
+          const count = getViewerCount(sessionId);
+
+          if (role === "subscriber") {
             console.log(`👋 Viewer left session ${sessionId}. Count: ${count}`);
-            io.to(sessionId).emit("viewer-count", count);
-          } else if (sessionView && sessionView.role === "publisher") {
+          } else if (role === "publisher") {
             console.log(
-              `🎥 Publisher left their own session ${sessionId} (count unchanged)`
+              `🎥 Publisher left their own session ${sessionId}. Current viewers: ${count}`
             );
           }
+
+          // Broadcast updated count
+          io.to(sessionId).emit("viewer-count", count);
         }
       } catch (error) {
         console.error("Error updating session view:", error);
@@ -300,6 +427,63 @@ export const setupSocketHandlers = (io: SocketIOServer) => {
       }
     });
 
+    // Handle product click tracking
+    socket.on(
+      "track-product-click",
+      async (payload: TrackProductClickPayload) => {
+        const { sessionId, productId, userId } = payload;
+
+        console.log(
+          `🖱️ Product click tracked: ${productId} in session ${sessionId} by user ${
+            userId || "anonymous"
+          }`
+        );
+
+        try {
+          // Verify session exists and is live
+          const session = await sessionService.findOne(sessionId);
+          if (!session) {
+            console.error(`❌ Session ${sessionId} not found`);
+            return;
+          }
+
+          if (session.status !== "live") {
+            console.error(
+              `❌ Cannot track click - session ${sessionId} is ${session.status}`
+            );
+            return;
+          }
+
+          // Verify product exists in session
+          const isInSession = await sessionProductService.isProductInSession(
+            sessionId,
+            productId
+          );
+
+          if (!isInSession) {
+            console.error(
+              `❌ Product ${productId} not found in session ${sessionId}`
+            );
+            return;
+          }
+
+          // Track the click
+          productClickService.trackClick(sessionId, productId, userId);
+
+          // Start stats broadcast if not already running
+          if (!statsBroadcastIntervals.has(sessionId)) {
+            startStatsBroadcast(sessionId);
+          }
+
+          console.log(
+            `✅ Click tracked for product ${productId} in session ${sessionId}`
+          );
+        } catch (error) {
+          console.error("❌ Error tracking product click:", error);
+        }
+      }
+    );
+
     // Disconnect
     socket.on("disconnect", async () => {
       console.log("❌ Client disconnected:", socket.id);
@@ -308,27 +492,31 @@ export const setupSocketHandlers = (io: SocketIOServer) => {
       try {
         const sessionViewId = socketToViewMap.get(socket.id);
         const sessionId = socketToSessionMap.get(socket.id);
+        const role = sessionToRoleMap.get(socket.id);
 
-        if (sessionViewId) {
+        if (sessionViewId && sessionId) {
           const sessionView = await sessionViewService.leaveSession(
             sessionViewId
           );
           socketToViewMap.delete(socket.id);
           socketToSessionMap.delete(socket.id);
+          sessionToRoleMap.delete(socket.id);
 
-          // Only decrement count if it was a subscriber (not publisher)
-          if (sessionView && sessionView.role === "subscriber" && sessionId) {
-            const count = Math.max(0, (viewerCounts.get(sessionId) || 1) - 1);
-            viewerCounts.set(sessionId, count);
+          // Calculate and broadcast new viewer count
+          const count = getViewerCount(sessionId);
+
+          if (role === "subscriber") {
             console.log(
               `👋 Viewer disconnected from session ${sessionId}. Count: ${count}`
             );
-            io.to(sessionId).emit("viewer-count", count);
-          } else if (sessionView && sessionView.role === "publisher") {
+          } else if (role === "publisher") {
             console.log(
-              `🎥 Publisher disconnected from their session (count unchanged)`
+              `🎥 Publisher disconnected from their session. Current viewers: ${count}`
             );
           }
+
+          // Broadcast updated count
+          io.to(sessionId).emit("viewer-count", count);
         }
       } catch (error) {
         console.error("Error handling disconnect:", error);

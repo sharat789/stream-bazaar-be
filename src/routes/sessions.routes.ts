@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { SessionController } from "../controllers/sessions.controller";
 import { authenticate, optionalAuth } from "../middleware/auth.middleware";
+import { getConversionStats } from "../controllers/analytics.controller";
 import chatRoutes from "./chat.routes";
 import sessionProductRoutes from "./session-product.routes";
 import analyticsRoutes from "./analytics.routes";
@@ -51,6 +52,13 @@ router.post(
   "/:id/showcase",
   authenticate,
   controller.setActiveProduct.bind(controller)
+);
+
+// Product conversion statistics
+router.get(
+  "/:sessionId/conversion-stats",
+  optionalAuth, // Allow both authenticated and anonymous access
+  getConversionStats
 );
 
 // Nested routes
