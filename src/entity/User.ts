@@ -12,16 +12,19 @@ export class User {
   id: number;
 
   @Column({ nullable: false })
-  name: string;
+  username: string;
 
-  @Column({ nullable: false })
+  @Column({ nullable: false, unique: true })
   email: string;
 
-  @Column({ nullable: false })
+  @Column({ nullable: false, select: false })
   password: string;
 
-  @Column({ default: "user" })
+  @Column({ default: "viewer" })
   role: string;
+
+  @Column({ type: "text", nullable: true, select: false })
+  refreshToken: string | null;
 
   @CreateDateColumn()
   createdAt: Date;

@@ -20,8 +20,20 @@ export class Product {
   @Column({ type: "decimal", precision: 10, scale: 2 })
   price: number;
 
+  @Column({ type: "decimal", precision: 10, scale: 2, nullable: true })
+  originalPrice: number;
+
+  @Column({ type: "varchar", length: 100 })
+  category: string;
+
+  @Column({ type: "boolean", default: true })
+  inStock: boolean;
+
   @Column({ type: "varchar", length: 500, nullable: true })
   imageUrl: string;
+
+  @Column({ type: "int", nullable: true })
+  sellerId: number;
 
   @CreateDateColumn()
   createdAt: Date;

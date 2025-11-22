@@ -17,6 +17,19 @@ export class UserController {
     }
   }
 
+  async getLiveUsers(req: Request, res: Response, next: NextFunction) {
+    try {
+      const liveUsers = await this.userService.findLiveUsers();
+      res.json({
+        success: true,
+        data: liveUsers,
+        count: liveUsers.length,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   async getUserById(req: Request, res: Response, next: NextFunction) {
     try {
       const id = parseInt(req.params.id);
@@ -83,7 +96,7 @@ export class UserController {
       }
 
       const updateData: Partial<typeof user> = {};
-      if (name) updateData.name = name;
+      if (name) updateData.username = name;
       if (email) updateData.email = email;
       if (password) updateData.password = password; // Note: Hash in production!
       if (role) updateData.role = role;

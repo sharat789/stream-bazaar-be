@@ -1,13 +1,61 @@
 import { Router } from "express";
 import { SessionController } from "../controllers/sessions.controller";
+import { authenticate, optionalAuth } from "../middleware/auth.middleware";
+import chatRoutes from "./chat.routes";
+import sessionProductRoutes from "./session-product.routes";
+import analyticsRoutes from "./analytics.routes";
 
 const router = Router();
 const controller = new SessionController();
 
-router.get("/", controller.getAll.bind(controller));
+// Protected routes (require authentication to view user's own sessions)
+router.get("/", authenticate, controller.getAll.bind(controller));
 router.get("/:id", controller.getOne.bind(controller));
-router.post("/", controller.create.bind(controller));
-router.patch("/:id/status", controller.updateStatus.bind(controller));
-router.delete("/:id", controller.delete.bind(controller));
+
+// Protected routes (require authentication)
+router.post("/", authenticate, controller.create.bind(controller));
+router.patch(
+  "/:id/status",
+  authenticate,
+  controller.updateStatus.bind(controller)
+);
+router.delete("/:id", authenticate, controller.delete.bind(controller));
+
+// Streaming routes
+router.post(
+  "/:id/start-stream",
+  authenticate,
+  controller.startStream.bind(controller)
+);
+router.post(
+  "/:id/end-stream",
+  authenticate,
+  controller.endStream.bind(controller)
+);
+router.get(
+  "/:id/stream-token",
+  optionalAuth, // Allow both authenticated and anonymous viewers
+  controller.getStreamToken.bind(controller)
+);
+router.post(
+  "/:id/refresh-token",
+  optionalAuth, // Allow both authenticated and anonymous viewers
+  controller.refreshToken.bind(controller)
+);
+
+// Reaction statistics
+router.get("/:id/reactions", controller.getReactions.bind(controller));
+
+// Product showcase
+router.post(
+  "/:id/showcase",
+  authenticate,
+  controller.setActiveProduct.bind(controller)
+);
+
+// Nested routes
+router.use("/:sessionId/chat", chatRoutes);
+router.use("/:sessionId/products", sessionProductRoutes);
+router.use("/:sessionId/analytics", analyticsRoutes);
 
 export default router;

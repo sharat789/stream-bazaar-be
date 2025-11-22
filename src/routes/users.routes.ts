@@ -5,6 +5,9 @@ const router = Router();
 const userController = new UserController();
 
 router.get("/", (req, res, next) => userController.getAllUsers(req, res, next));
+router.get("/live", (req, res, next) =>
+  userController.getLiveUsers(req, res, next)
+);
 router.get("/:id", (req, res, next) =>
   userController.getUserById(req, res, next)
 );

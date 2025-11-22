@@ -13,6 +13,7 @@ import {
 } from "./middleware/logging.middleware";
 import { createServer } from "http";
 import { setupSocketHandlers } from "./ws/socket.handler";
+import { AgoraService } from "./services/agora.service";
 
 dotenv.config();
 
@@ -21,14 +22,22 @@ const httpServer = createServer(app);
 const io = new SocketIOServer(httpServer, {
   cors: {
     origin: "*",
-    methods: ["GET", "POST"],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    credentials: true,
   },
 });
 
 const PORT = config.port;
 
-// Middleware
-app.use(cors(config.cors));
+// Middleware - More permissive CORS for development
+app.use(
+  cors({
+    origin: "*",
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+  })
+);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(requestLogger);
@@ -41,6 +50,53 @@ app.get("/health", (req: Request, res: Response) => {
     timestamp: new Date().toISOString(),
     environment: config.nodeEnv,
   });
+});
+
+// Agora test endpoint (for debugging)
+app.get("/api/test-agora", (req: Request, res: Response) => {
+  try {
+    const agoraService = new AgoraService();
+    const testChannel = "test-channel-" + Date.now();
+    const testUid = 12345;
+
+    const publisherToken = agoraService.generatePublisherToken(
+      testChannel,
+      testUid
+    );
+    const subscriberToken = agoraService.generateSubscriberToken(
+      testChannel,
+      0
+    );
+
+    res.json({
+      success: true,
+      message: "Agora token generation test successful",
+      config: {
+        configured: agoraService.isConfigured(),
+        appId: agoraService.getAppId(),
+      },
+      publisher: {
+        channelName: publisherToken.channelName,
+        uid: publisherToken.uid,
+        token: publisherToken.token.substring(0, 50) + "...",
+        tokenLength: publisherToken.token.length,
+        expiresAt: publisherToken.expiresAt,
+      },
+      subscriber: {
+        channelName: subscriberToken.channelName,
+        uid: subscriberToken.uid,
+        token: subscriberToken.token.substring(0, 50) + "...",
+        tokenLength: subscriberToken.token.length,
+        expiresAt: subscriberToken.expiresAt,
+      },
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      stack: error.stack,
+    });
+  }
 });
 
 // API routes
