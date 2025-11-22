@@ -11,9 +11,16 @@ export const AppDataSource = new DataSource({
   username: process.env.DB_USERNAME || "postgres",
   password: process.env.DB_PASSWORD || "password",
   database: process.env.DB_NAME || "streamcart",
-  synchronize: process.env.NODE_ENV !== "production", // Auto-sync in dev, false in production
-  //   logging: process.env.NODE_ENV === "development",
-  entities: ["src/entity/**/*.ts"],
-  migrations: ["src/migration/**/*.ts"],
+  synchronize: true,
+  logging: process.env.NODE_ENV === "development",
+  entities:
+    process.env.NODE_ENV === "production"
+      ? ["build/entity/**/*.js"]
+      : ["src/entity/**/*.ts"],
+  migrations: [],
   subscribers: [],
+  ssl:
+    process.env.NODE_ENV === "production"
+      ? { rejectUnauthorized: false }
+      : false,
 });
