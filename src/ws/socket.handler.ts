@@ -28,16 +28,9 @@ interface TrackProductClickPayload {
   userId: number | null;
 }
 
-// Store the io instance globally so controllers can emit events
 let ioInstance: SocketIOServer | null = null;
-
-// Store in-memory reaction counts per session
 const sessionReactions = new Map<string, Map<string, number>>();
-
-// Store broadcast intervals for product click stats
 const statsBroadcastIntervals = new Map<string, NodeJS.Timeout>();
-
-// Product click service instance
 const productClickService = new ProductClickService();
 
 export const getSocketIO = (): SocketIOServer | null => {
@@ -79,17 +72,14 @@ const startStatsBroadcast = (sessionId: string) => {
     if (!ioInstance) return;
 
     try {
-      // Update viewer count
       await productClickService.updateViewerCount(sessionId);
 
-      // Get current stats
       const stats = productClickService.getSessionStats(sessionId);
       const trendingProducts = productClickService.getTrendingProducts(
         sessionId,
         5
       );
 
-      // Broadcast to creator (detailed stats)
       ioInstance.to(sessionId).emit("product-click-stats", {
         sessionId,
         productStats: stats.productStats,
@@ -97,7 +87,6 @@ const startStatsBroadcast = (sessionId: string) => {
         timestamp: new Date(),
       });
 
-      // Broadcast to all viewers (trending products)
       ioInstance.to(sessionId).emit("trending-products", {
         sessionId,
         products: trendingProducts,
@@ -109,7 +98,7 @@ const startStatsBroadcast = (sessionId: string) => {
         error
       );
     }
-  }, 2000); // 2 seconds
+  }, 2000);
 
   statsBroadcastIntervals.set(sessionId, interval);
   console.log(`📊 Started stats broadcast for session ${sessionId}`);
@@ -134,13 +123,8 @@ export const persistProductClickData = async (
   sessionId: string
 ): Promise<void> => {
   try {
-    // Stop broadcasting
     stopStatsBroadcast(sessionId);
-
-    // Persist data to database
     await productClickService.persistSessionData(sessionId);
-
-    console.log(`✅ Product click data persisted for session ${sessionId}`);
   } catch (error) {
     console.error(
       `❌ Error persisting product click data for session ${sessionId}:`,
@@ -156,9 +140,9 @@ export const setupSocketHandlers = (io: SocketIOServer) => {
   const chatService = new ChatService();
   const sessionService = new SessionService();
   const sessionProductService = new SessionProductService();
-  const socketToViewMap = new Map<string, string>(); // socketId -> sessionViewId
-  const socketToSessionMap = new Map<string, string>(); // socketId -> sessionId
-  const sessionToRoleMap = new Map<string, string>(); // socketId -> role (publisher/subscriber)
+  const socketToViewMap = new Map<string, string>();
+  const socketToSessionMap = new Map<string, string>();
+  const sessionToRoleMap = new Map<string, string>();
 
   /**
    * Calculate current viewer count for a session by counting active subscriber sockets
@@ -169,7 +153,6 @@ export const setupSocketHandlers = (io: SocketIOServer) => {
 
     if (socketsInRoom) {
       for (const socketId of socketsInRoom) {
-        // Only count subscribers (not publishers)
         if (sessionToRoleMap.get(socketId) === "subscriber") {
           count++;
         }
@@ -189,12 +172,8 @@ export const setupSocketHandlers = (io: SocketIOServer) => {
 
       socket.join(sessionId);
 
-      // Track view in database
       try {
-        // Fetch session to determine role based on ownership
         const session = await sessionService.findOne(sessionId);
-
-        // Determine role: publisher if user is session creator, subscriber otherwise
         const isPublisher = userId && session && userId === session.creatorId;
         const role = isPublisher ? "publisher" : "subscriber";
 
@@ -207,9 +186,8 @@ export const setupSocketHandlers = (io: SocketIOServer) => {
           });
         socketToViewMap.set(socket.id, sessionView.id);
         socketToSessionMap.set(socket.id, sessionId);
-        sessionToRoleMap.set(socket.id, role); // Track role for viewer counting
+        sessionToRoleMap.set(socket.id, role);
 
-        // Calculate and broadcast current viewer count
         const count = getViewerCount(sessionId);
 
         if (isPublisher) {
@@ -226,18 +204,15 @@ export const setupSocketHandlers = (io: SocketIOServer) => {
           );
         }
 
-        // Broadcast count to all in session
         io.to(sessionId).emit("viewer-count", count);
       } catch (error) {
         console.error("Error tracking session view:", error);
       }
     });
 
-    // Leave a session
     socket.on("leave-session", async (sessionId: string) => {
       socket.leave(sessionId);
 
-      // Update view record in database
       try {
         const sessionViewId = socketToViewMap.get(socket.id);
         const role = sessionToRoleMap.get(socket.id);
@@ -250,7 +225,6 @@ export const setupSocketHandlers = (io: SocketIOServer) => {
           socketToSessionMap.delete(socket.id);
           sessionToRoleMap.delete(socket.id);
 
-          // Calculate and broadcast new viewer count
           const count = getViewerCount(sessionId);
 
           if (role === "subscriber") {
@@ -261,7 +235,6 @@ export const setupSocketHandlers = (io: SocketIOServer) => {
             );
           }
 
-          // Broadcast updated count
           io.to(sessionId).emit("viewer-count", count);
         }
       } catch (error) {
@@ -269,33 +242,19 @@ export const setupSocketHandlers = (io: SocketIOServer) => {
       }
     });
 
-    // Handle reactions
     socket.on(
       "send-reaction",
       ({ sessionId, type }: { sessionId: string; type: string }) => {
         console.log(`Reaction received: ${type} in session ${sessionId}`);
 
-        // Track reaction in memory
         if (!sessionReactions.has(sessionId)) {
           sessionReactions.set(sessionId, new Map());
         }
         const reactions = sessionReactions.get(sessionId)!;
         reactions.set(type, (reactions.get(type) || 0) + 1);
 
-        // Broadcast reaction to all users in real-time
         io.to(sessionId).emit("new-reaction", { type, timestamp: new Date() });
 
-        // Optionally broadcast current counts to session (for live stats)
-        // const totalReactions = Array.from(reactions.values()).reduce(
-        //   (sum, count) => sum + count,
-        //   0
-        // );
-        // io.to(sessionId).emit("reaction-stats", {
-        //   sessionId,
-        //   counts: Object.fromEntries(reactions),
-        //   total: totalReactions,
-        // });
-        // Optionally broadcast reaction percentages to session (for live stats)
         const totalReactions = Array.from(reactions.values()).reduce(
           (sum, count) => sum + count,
           0
@@ -317,7 +276,6 @@ export const setupSocketHandlers = (io: SocketIOServer) => {
       }
     );
 
-    // Handle chat messages
     socket.on("send-message", async (payload: ChatMessagePayload) => {
       const { sessionId, message, userId, userName } = payload;
 
@@ -326,14 +284,12 @@ export const setupSocketHandlers = (io: SocketIOServer) => {
       );
 
       try {
-        // Save message to database
         const savedMessage = await chatService.createMessage({
           sessionId,
           userId,
           message,
         });
 
-        // Broadcast message to all users in the session with real DB ID
         io.to(sessionId).emit("new-message", {
           id: savedMessage.id,
           message: savedMessage.message,
@@ -347,7 +303,6 @@ export const setupSocketHandlers = (io: SocketIOServer) => {
       } catch (error) {
         console.error("❌ Error saving chat message:", error);
 
-        // Still broadcast even if DB save fails (graceful degradation)
         io.to(sessionId).emit("new-message", {
           id: `temp-${Date.now()}`,
           message,
@@ -359,7 +314,6 @@ export const setupSocketHandlers = (io: SocketIOServer) => {
       }
     });
 
-    // Handle product showcase
     socket.on("showcase-product", async (payload: ShowcaseProductPayload) => {
       const { sessionId, productId } = payload;
 
@@ -368,14 +322,12 @@ export const setupSocketHandlers = (io: SocketIOServer) => {
       );
 
       try {
-        // Verify session exists
         const session = await sessionService.findOne(sessionId);
         if (!session) {
           console.error(`❌ Session ${sessionId} not found`);
           return;
         }
 
-        // Verify session status
         if (session.status !== "live" && session.status !== "paused") {
           console.error(
             `❌ Cannot showcase product - session ${sessionId} is ${session.status}`
@@ -383,7 +335,6 @@ export const setupSocketHandlers = (io: SocketIOServer) => {
           return;
         }
 
-        // If productId provided, verify it exists in session's product list
         if (productId) {
           const isInSession = await sessionProductService.isProductInSession(
             sessionId,
@@ -398,15 +349,12 @@ export const setupSocketHandlers = (io: SocketIOServer) => {
           }
         }
 
-        // Update active product in database
         await sessionService.update(sessionId, {
           activeProductId: productId || undefined,
         });
 
-        // Get updated session with product details
         const updatedSession = await sessionService.findOne(sessionId);
 
-        // Broadcast to all viewers in the session
         if (productId) {
           io.to(sessionId).emit("product-showcased", {
             sessionId,
@@ -427,7 +375,6 @@ export const setupSocketHandlers = (io: SocketIOServer) => {
       }
     });
 
-    // Handle product click tracking
     socket.on(
       "track-product-click",
       async (payload: TrackProductClickPayload) => {
@@ -440,7 +387,6 @@ export const setupSocketHandlers = (io: SocketIOServer) => {
         );
 
         try {
-          // Verify session exists and is live
           const session = await sessionService.findOne(sessionId);
           if (!session) {
             console.error(`❌ Session ${sessionId} not found`);
@@ -454,7 +400,6 @@ export const setupSocketHandlers = (io: SocketIOServer) => {
             return;
           }
 
-          // Verify product exists in session
           const isInSession = await sessionProductService.isProductInSession(
             sessionId,
             productId
@@ -467,10 +412,8 @@ export const setupSocketHandlers = (io: SocketIOServer) => {
             return;
           }
 
-          // Track the click
           productClickService.trackClick(sessionId, productId, userId);
 
-          // Start stats broadcast if not already running
           if (!statsBroadcastIntervals.has(sessionId)) {
             startStatsBroadcast(sessionId);
           }
@@ -484,11 +427,9 @@ export const setupSocketHandlers = (io: SocketIOServer) => {
       }
     );
 
-    // Disconnect
     socket.on("disconnect", async () => {
       console.log("❌ Client disconnected:", socket.id);
 
-      // Update any active session views
       try {
         const sessionViewId = socketToViewMap.get(socket.id);
         const sessionId = socketToSessionMap.get(socket.id);
@@ -502,7 +443,6 @@ export const setupSocketHandlers = (io: SocketIOServer) => {
           socketToSessionMap.delete(socket.id);
           sessionToRoleMap.delete(socket.id);
 
-          // Calculate and broadcast new viewer count
           const count = getViewerCount(sessionId);
 
           if (role === "subscriber") {
@@ -515,7 +455,6 @@ export const setupSocketHandlers = (io: SocketIOServer) => {
             );
           }
 
-          // Broadcast updated count
           io.to(sessionId).emit("viewer-count", count);
         }
       } catch (error) {

@@ -197,13 +197,6 @@ export class SessionController {
       // Use session ID as channel name
       const channelName = id;
 
-      console.log("🚀 Starting stream:", {
-        sessionId: id,
-        channelName,
-        userId: req.user!.userId,
-        currentStatus: session.status,
-      });
-
       // Generate publisher token for creator
       const tokenData = agoraService.generatePublisherToken(
         channelName,
